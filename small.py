@@ -33,8 +33,9 @@ class Memory():
                 st_atime = now,
                 st_nlink = 2)
         self.diskId = 0
-        self.writeDisk()
+        self.bitmap = bytearray([0]*12)
         #print("+++++",self.printX())
+        self.writeDisk()
 
     def writeDisk(self):
         print(self.files['/']['st_mode']) 
@@ -48,12 +49,13 @@ class Memory():
         byte_mtime = disktools.int_to_bytes(self.files['/']['st_mtime'],4)
         byte_atime = disktools.int_to_bytes(self.files['/']['st_atime'],4)
         byte_nlink = disktools.int_to_bytes(self.files['/']['st_nlink'],1)
+        size = disktools.int_to_bytes( 30,2 )
         print (byte_mode,"++", byte_ctime,"++", byte_mtime,"++", byte_atime,"++", byte_nlink)
         
         print (byte_mode.__class__)
         empty = bytearray([0]*1)
 
-        data = empty + byte_mode + byte_ctime + byte_mtime + byte_atime + byte_nlink 
+        data = empty + byte_mode + byte_ctime + byte_mtime + byte_atime + byte_nlink + size + self.bitmap
         print (self.diskId)
         disktools.write_block(self.diskId, data)
     
@@ -108,6 +110,10 @@ if __name__ == '__main__':
     print(data[16] == 0)
     print(data[17] == 0)
 
-    i = 0
-    i+= 1
-    print (i)
+    name = "Hello"
+    byte_name = bytearray(name.encode())
+    empty = bytearray([0]*(16-len(name)))
+
+    print(name, byte_name+empty)
+    
+

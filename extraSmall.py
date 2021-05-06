@@ -36,16 +36,27 @@ def getDiskData(func):
         args[3...n] : *this is pretty random
         """
         #print(args[0].files[args[1]])
+        #print(args[1])
+        #print(args[0].files)
         if args[1] in args[0].files:
             if not 'st_mode' in  args[0].files[args[1]] :
                 #read from blockkk
-                print(disktools.read_block(args[1].block_id))
+                data = disktools.read_block(args[0].files[args[1]]['block_id'])
+                 
+                args[0].files[args[1]] = dict(
+                        st_mode = disktools.bytes_to_int(data[1:3]),
+                        st_ctime = disktools.bytes_to_int(data[3:7]),
+                        st_mtime = disktools.bytes_to_int(data[7:11]),
+                        st_atime = disktools.bytes_to_int(data[11:15]),
+                        st_nlink = disktools.bytes_to_int(data[15:16]),
+                        size = disktools.bytes_to_int(data[16:18]))
 
         returnVal = func(*args, **kwargs)
         return returnVal
     return f
 
-def writeOnDisk(func):
+
+def writeMetaDataOnDisk(func):
     def f(*args, **kwargs):
         returnVal = func(*args, **kwargs)
         #print(args[1])
@@ -55,24 +66,73 @@ def writeOnDisk(func):
         byte_mtime = disktools.int_to_bytes(args[0].files[args[1]]['st_mtime'],4)        
         byte_atime = disktools.int_to_bytes(args[0].files[args[1]]['st_atime'],4)        
         byte_nlink = disktools.int_to_bytes(args[0].files[args[1]]['st_nlink'],1)        
-        
-        print("=++++=", disktools.bytes_to_int(byte_mode))
-        
-        data = bytearray([0]*1) + byte_mode + byte_ctime + byte_mtime + byte_atime + byte_nlink
+        byte_b_id = disktools.int_to_bytes(args[0].files[args[1]]['block_id'],1)        
+        byte_size = disktools.int_to_bytes(args[0].files[args[1]]['size'],2)        
+        data = bytearray([0]*1) + byte_mode + byte_ctime + byte_mtime + byte_atime + byte_nlink+byte_size
+
         print("Data :",data,", BlockIndex :",args[0].files[args[1]]['block_id'])
         disktools.write_block(args[0].files[args[1]]['block_id'], data) 
         
+
+
+        name = args[1][1:len(args[1])]
+        empty = bytearray([0]*(16-len(name)))
+        ab = (bytearray(name.encode()) + empty + byte_b_id ) 
+        
+       
+        cData = disktools.read_block(0)
+        if (cData[0] != '\00'):
+            newData = distktools.read_block(1)
+            cData += newData
+        
+        cSize = args[0].files['/']['size']
+        if (cSize > 64):
+            i_page = int( cSize / 64)
+            print(i_page)
+        
+        nData = cData[0:16]+disktools.int_to_bytes(cSize+16,2) +cData[18:cSize] + ab
+        print(nData)
+        print(len(nData),"++",cSize+17)
+        args[0].files['/']['size'] = cSize+17
+        
+
+        block_id_counter = 0
+        while ( len(nData) > 64 ):
+            print(nData[0])
+
+            chunk = nData[0:64]
+            disktools.write_block(block_id_counter, chunk)
+            block_id_counter += 1
+            nData = bytearray([0]) + nData[64:len(nData)]
+            if (block_id_counter > 3):
+                print ("METABLOCK OVER THE LIMIT")
+
+        disktools.write_block( block_id_counter, nData)
+
         return returnVal
     return f
 
+def writeDataOnDisk(func):
+    def f(*args, **kwargs):
+        returnVal = func(*args, **kwargs)
+        print(args[0].data[args[1]])
+        return returnVal
+    return f
 
 
 class Memory(LoggingMixIn, Operations):
 
     def __init__(self):
-        rootMetaData = disktools.read_block(ROOT_BLOCK_ID)
-        self.bitmap = [0]
+        indexBlock = ROOT_BLOCK_ID
+        rootMetaData = disktools.read_block(indexBlock)
+        self.bitmap = [0,1,2,3]
         nextPage = rootMetaData[0:1]
+        print("Next page :", nextPage, ":", nextPage == '\x00')
+        while (nextPage != '\x00' and indexBlock<4 ):
+            print("Reading New page")
+            nextData = disktools.read_block(indexBlock+1)
+            nextPage = nextData[0:1]
+            rootMetaData += nextPage[1:len(nextData)]
 
         self.files = {}
         self.data = defaultdict(bytes)
@@ -82,16 +142,24 @@ class Memory(LoggingMixIn, Operations):
                 st_ctime = disktools.bytes_to_int(rootMetaData[3:7]),
                 st_mtime = disktools.bytes_to_int(rootMetaData[7:11]),
                 st_atime = disktools.bytes_to_int(rootMetaData[11:15]),
-                st_nlink = disktools.bytes_to_int(rootMetaData[15:16]))
+                st_nlink = disktools.bytes_to_int(rootMetaData[15:16]),
+                size = disktools.bytes_to_int(rootMetaData[16:18])
+                )
+        print("file size :",self.files['/']['size']) 
         
-        index = 16
+        index = 18
         while(rootMetaData[index] != 0):
-            name = rootMetaData[index : index+16]
-            b_id = rootMetaData[index+16 : index+17]
+            if(index + 17 > len(rootMetaData)):
+                print("Major issue ! Not reading enough block")
+
+            name ="/"+ rootMetaData[index : index+16].decode().rstrip('\x00')
+            print(name, len(name))
+            print(rootMetaData[index+16 : index+17])
+            b_id = disktools.bytes_to_int(rootMetaData[index+16 : index+17])
             self.files[name] = dict(
                     block_id = b_id)
             self.bitmap.append(b_id) #the block is no longer free.
-            index += 16
+            index += 17
 
     
     def chmod(self, path, mode):
@@ -103,7 +171,7 @@ class Memory(LoggingMixIn, Operations):
         self.files[path]['st_uid'] = uid
         self.files[path]['st_gid'] = gid
 
-    @writeOnDisk
+    @writeMetaDataOnDisk
     def create(self, path, mode):
         b_id = -1
         for i in range(NUM_BLOCKS):
@@ -124,7 +192,8 @@ class Memory(LoggingMixIn, Operations):
             st_ctime=now,
             st_mtime=now,
             st_atime=now,
-            block_id = b_id
+            block_id = b_id,
+            size = 0
             )
         self.fd += 1
         return self.fd
@@ -205,6 +274,7 @@ class Memory(LoggingMixIn, Operations):
 
         self.data[target] = source
 
+    @writeDataOnDisk
     def truncate(self, path, length, fh=None):
         # make sure extending the file fills in zero bytes
         self.data[path] = self.data[path][:length].ljust(
@@ -221,6 +291,7 @@ class Memory(LoggingMixIn, Operations):
         self.files[path]['st_atime'] = atime
         self.files[path]['st_mtime'] = mtime
 
+    @writeDataOnDisk
     def write(self, path, data, offset, fh):
         self.data[path] = (
             # make sure the data gets inserted at the right offset
@@ -237,7 +308,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('mount')
     args = parser.parse_args()
-    print("++++++++++++++++++++++++++",args.mount)
+    print("====== MOUNTING ======")
 
     logging.basicConfig(level=logging.CRITICAL)
     fuse = FUSE(Memory(), args.mount, foreground=True)

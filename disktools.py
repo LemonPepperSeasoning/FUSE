@@ -28,7 +28,6 @@ def read_block(block_num):
 
 def write_block(block_num, data):
     '''Writes data to the block_num block.'''
-    print("getting called")
     if block_num >= NUM_BLOCKS:
         raise IOError('Block number out of range')
     with open(DISK_NAME, 'r+b') as disk:
